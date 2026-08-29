@@ -24,7 +24,7 @@
 #define OLED_ADDRESS 0x3C // Default address, will try 0x3D if fails
 
 // Joystick deadzone
-#define JOY_DEADZONE 80
+#define JOY_DEADZONE 20 // Further reduced for better sensitivity
 
 // EEPROM save version
 #define SAVE_VERSION 1
@@ -353,28 +353,58 @@ void drawMenu() {
   display.setTextSize(1);
   display.setTextColor(SSD1306_WHITE);
 
-  // Draw menu items - ensure they fit on screen with better spacing
-  uint8_t itemHeight = 10; // Height of each menu item
+  // Draw menu items - ensure they fit on screen
+  uint8_t itemHeight = 8;  // Height of each menu item (reduced to fit)
   uint8_t spacing = 2;     // Space between items
   uint8_t totalHeight = (itemHeight + spacing) * menuItemCount - spacing;
-  uint8_t startY = (SCREEN_HEIGHT - totalHeight) / 2; // Center menu vertically
+
+  // If menu is taller than screen, start from top and allow scrolling concept
+  // For now, we'll center what we can and let overflow be handled
+  int8_t startY;
+  if (totalHeight > SCREEN_HEIGHT) {
+    // Menu too tall, start at top and let bottom items be cut off if needed
+    startY = 0;
+  } else {
+    // Menu fits, center it
+    startY = (SCREEN_HEIGHT - totalHeight) / 2;
+  }
 
   for (uint8_t i = 0; i < menuItemCount; i++) {
-    uint8_t yPos = startY + i * (itemHeight + spacing);
+    int8_t yPos = startY + i * (itemHeight + spacing);
 
-    // Ensure we don't draw off-screen
-    if (yPos + itemHeight > SCREEN_HEIGHT) {
-      yPos = SCREEN_HEIGHT - itemHeight;
+    // Skip items that are completely off screen (above)
+    if (yPos + itemHeight < 0) {
+      continue;
     }
 
-    if (i == menuSelection) {
-      display.fillRect(0, yPos, SCREEN_WIDTH, itemHeight, SSD1306_WHITE);
-      display.setTextColor(SSD1306_BLACK);
-    } else {
-      display.setTextColor(SSD1306_WHITE);
+    // Stop drawing if we're completely off screen (below)
+    if (yPos > SCREEN_HEIGHT) {
+      break;
     }
-    display.setCursor(0, yPos + 2); // Small padding for text
-    display.print(menuItems[i]);
+
+    // Clip yPos to visible range
+    int8_t drawY = yPos;
+    uint8_t drawHeight = itemHeight;
+
+    if (drawY < 0) {
+      drawHeight += drawY; // Reduce height if starting above screen
+      drawY = 0;
+    }
+    if (drawY + drawHeight > SCREEN_HEIGHT) {
+      drawHeight = SCREEN_HEIGHT - drawY; // Reduce height if ending below screen
+    }
+
+    // Only draw if we have visible height
+    if (drawHeight > 0) {
+      if (i == menuSelection) {
+        display.fillRect(0, drawY, SCREEN_WIDTH, drawHeight, SSD1306_WHITE);
+        display.setTextColor(SSD1306_BLACK);
+      } else {
+        display.setTextColor(SSD1306_WHITE);
+      }
+      display.setCursor(0, drawY + 1); // Small padding for text
+      display.print(menuItems[i]);
+    }
   }
 
   display.display();
