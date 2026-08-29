@@ -1,0 +1,141 @@
+/*
+ * Diagnostic Sketch for Arduino Nano Tamagotchi Pet
+ *
+ * This sketch helps diagnose where the main code might be getting stuck.
+ * It tests OLED initialization, basic drawing, and reports progress via Serial.
+ *
+ * Upload this sketch, open Serial Monitor at 115200 baud, and follow the output
+ * to identify where execution stops.
+ */
+
+#include <Wire.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+
+// OLED settings
+#define SCREEN_WIDTH 128
+#define SCREEN_HEIGHT 64
+#define OLED_RESET    -1
+
+// Try both common OLED addresses
+#define OLED_ADDRESS_1 0x3C
+#define OLED_ADDRESS_2 0x3D
+
+// Create display objects for both addresses
+Adafruit_SSD1306 display1(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
+Adafruit_SSD1306 display2(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
+
+// Test results
+bool oled1Works = false;
+bool oled2Works = false;
+
+void setup() {
+  // Initialize Serial for debugging
+  Serial.begin(115200);
+  while (!Serial);  // Wait for Serial Monitor
+  Serial.println("=== Arduino Nano Pet Diagnostic ===");
+  Serial.println("Starting OLED tests...");
+
+  // Initialize I2C
+  Wire.begin();
+  Serial.println("I2C initialized");
+
+  // Test OLED at address 0x3C
+  Serial.print("Testing OLED at address 0x3C: ");
+  if (display1.begin(SSD1306_SWITCHCAPVCC, OLED_ADDRESS_1)) {
+    Serial.println("SUCCESS");
+    oled1Works = true;
+
+    // Clear display
+    display1.clearDisplay();
+    display1.display();
+
+    // Draw a test pattern
+    display1.setTextSize(1);
+    display1.setTextColor(SSD1306_WHITE);
+    display1.setCursor(0, 0);
+    display1.println("OLED Test 0x3C");
+    display1.println("Working!");
+    display1.display();
+
+    Serial.println("Display test pattern drawn");
+  } else {
+    Serial.println("FAILED");
+  }
+
+  // Test OLED at address 0x3D
+  Serial.print("Testing OLED at address 0x3D: ");
+  if (display2.begin(SSD1306_SWITCHCAPVCC, OLED_ADDRESS_2)) {
+    Serial.println("SUCCESS");
+    oled2Works = true;
+
+    // Clear display
+    display2.clearDisplay();
+    display2.display();
+
+    // Draw a test pattern
+    display2.setTextSize(1);
+    display2.setTextColor(SSD1306_WHITE);
+    display2.setCursor(0, 0);
+    display2.println("OLED Test 0x3D");
+    display2.println("Working!");
+    display2.display();
+
+    Serial.println("Display test pattern drawn");
+  } else {
+    Serial.println("FAILED");
+  }
+
+  // Summary
+  Serial.println("");
+  Serial.println("=== TEST RESULTS ===");
+  if (oled1Works) {
+    Serial.println("✓ OLED works at address 0x3C");
+  } else {
+    Serial.println("✗ OLED does not work at address 0x3C");
+  }
+
+  if (oled2Works) {
+    Serial.println("✓ OLED works at address 0x3D");
+  } else {
+    Serial.println("✗ OLED does not work at address 0x3D");
+  }
+
+  if (!oled1Works && !oled2Works) {
+    Serial.println("");
+    Serial.println("TROUBLESHOOTING:");
+    Serial.println("1. Check wiring: SDA→A4, SCL→A5");
+    Serial.println("2. Check OLED power (VCC to 3.3V or 5V)");
+    Serial.println("3. Try different OLED module if available");
+    Serial.println("4. Check for solder bridges or loose connections");
+  } else if (oled1Works) {
+    Serial.println("");
+    Serial.println("RECOMMENDATION: Use OLED_ADDRESS 0x3C in main sketch");
+  } else if (oled2Works) {
+    Serial.println("");
+    Serial.println("RECOMMENDATION: Use OLED_ADDRESS 0x3D in main sketch");
+  }
+
+  Serial.println("");
+  Serial.println("=== END OF SETUP ===");
+  Serial.println("If you see this, setup() completed successfully");
+  Serial.println("Check if main code is getting stuck in loop()");
+}
+
+void loop() {
+  // Blink using built-in LED to show we're still alive
+  static unsigned long lastBlink = 0;
+  if (millis() - lastBlink > 1000) {
+    lastBlink = millis();
+    digitalWrite(LED_BUILTIN, !digitalRead(LED_BUILTIN));
+
+    // Print periodic status via Serial
+    Serial.print("millis: ");
+    Serial.print(millis());
+    Serial.print(" | LED: ");
+    Serial.println(digitalRead(LED_BUILTIN) ? "ON" : "OFF");
+  }
+
+  // Small delay
+  delay(10);
+}
