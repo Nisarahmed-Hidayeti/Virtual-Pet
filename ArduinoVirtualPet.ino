@@ -334,13 +334,14 @@ void drawMainScreen() {
   display.print(F("Hun:"));
   display.print(pet.hunger);
 
-  // Draw pet in the middle (blue section) with blinking eyes
+  // Draw pet centered in the remaining area (below status bar)
   const unsigned char* petBitmap = getPetBitmap();
-  display.drawBitmap(SCREEN_WIDTH/2 - 8, 16, petBitmap, 16, 16, SSD1306_WHITE);
+  int petY = 16 + ((SCREEN_HEIGHT - 16) - 16) / 2; // Center vertically in remaining space
+  display.drawBitmap(SCREEN_WIDTH/2 - 8, petY, petBitmap, 16, 16, SSD1306_WHITE);
 
-  // Draw level
+  // Draw level below pet
   display.setTextColor(SSD1306_WHITE);
-  display.setCursor(2, 20);
+  display.setCursor(2, petY + 16 + 2);
   display.print(F("Lv:"));
   display.print(pet.level);
 
@@ -352,15 +353,27 @@ void drawMenu() {
   display.setTextSize(1);
   display.setTextColor(SSD1306_WHITE);
 
-  // Draw menu items
+  // Draw menu items - ensure they fit on screen with better spacing
+  uint8_t itemHeight = 10; // Height of each menu item
+  uint8_t spacing = 2;     // Space between items
+  uint8_t totalHeight = (itemHeight + spacing) * menuItemCount - spacing;
+  uint8_t startY = (SCREEN_HEIGHT - totalHeight) / 2; // Center menu vertically
+
   for (uint8_t i = 0; i < menuItemCount; i++) {
+    uint8_t yPos = startY + i * (itemHeight + spacing);
+
+    // Ensure we don't draw off-screen
+    if (yPos + itemHeight > SCREEN_HEIGHT) {
+      yPos = SCREEN_HEIGHT - itemHeight;
+    }
+
     if (i == menuSelection) {
-      display.fillRect(0, i*10, SCREEN_WIDTH, 10, SSD1306_WHITE);
+      display.fillRect(0, yPos, SCREEN_WIDTH, itemHeight, SSD1306_WHITE);
       display.setTextColor(SSD1306_BLACK);
     } else {
       display.setTextColor(SSD1306_WHITE);
     }
-    display.setCursor(0, i*10);
+    display.setCursor(0, yPos + 2); // Small padding for text
     display.print(menuItems[i]);
   }
 
@@ -654,8 +667,9 @@ void handleInput() {
         menuSelection = (menuSelection + 1) % menuItemCount;
         delay(150);
       } else if (joyX > JOY_DEADZONE || joyButtonPressed) {
-        // Select menu item
-        joyButtonPressed = false; // Consume the press
+        // Select menu item - consume the button press if used
+        bool wasButtonPress = joyButtonPressed;
+        joyButtonPressed = false; // Always consume button press
         switch (menuSelection) {
           case 0: currentState = STATE_FEEDING; break;
           case 1:
@@ -687,10 +701,16 @@ void handleInput() {
             case STATE_SLEEPING: drawSleeping(); break;
             case STATE_STATUS: drawStatus(); break;
           }
+          // If this was triggered by button press, we need to prevent immediate re-trigger
+          // in the new state by adding a small delay
+          if (wasButtonPress) {
+            delay(100); // Small delay to prevent double-trigger
+          }
         }
-        delay(200); // Prevent multiple triggers
+        delay(150); // Prevent multiple triggers
       } else if (joyX < -JOY_DEADZONE) {
-        // Back to main
+        // Back to main - consume button press for LEFT action
+        joyButtonPressed = false;
         currentState = STATE_MAIN;
         drawMainScreen();
         delay(200);
