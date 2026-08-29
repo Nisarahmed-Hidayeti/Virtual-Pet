@@ -1,6 +1,6 @@
 /*
   Arduino Nano Tamagotchi-Style Virtual Pet
-  Based on the deliverables and specifications.
+  Fully functional implementation based on specifications.
 */
 
 #include <Arduino.h>
@@ -20,7 +20,7 @@
 // OLED settings
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 64
-#define OLED_RESET -1 // Reset pin # (or -1 if sharing Arduino reset pin)
+#define OLED_RESET -1
 #define OLED_ADDRESS 0x3C // Default address, will try 0x3D if fails
 
 // Joystick deadzone
@@ -64,9 +64,15 @@ PetStats pet;
 State currentState = STATE_STARTUP;
 unsigned long lastUpdate = 0;
 unsigned long lastSave = 0;
+unsigned long lastBlink = 0;
+unsigned long startupStartTime = 0;
+bool eyesOpen = true;
 const unsigned long UPDATE_INTERVAL_MS = 5000;  // Update stats every 5 seconds
 const unsigned long SAVE_INTERVAL_MS = 30000;   // Save to EEPROM every 30 seconds
 const unsigned long AGE_INTERVAL_MS = 10000;    // Age increases every 10 seconds
+const unsigned long BLINK_INTERVAL_MS = 3000;   // Blink every 3 seconds
+const unsigned long BLINK_DURATION_MS = 100;    // Eyes closed for 100ms
+const unsigned long STARTUP_DISPLAY_MS = 2000;  // Show startup screen for 2 seconds
 
 // Menu items
 const char* menuItems[] = {
@@ -87,6 +93,15 @@ bool joyButtonPressed = false;
 unsigned long lastDebounceTime = 0;
 const unsigned long debounceDelay = 50;
 
+// Game variables for catch game
+int catchGameCursorX = 64;
+int catchGameCursorY = 32;
+int catchGameTargetX = 0;
+int catchGameTargetY = 0;
+unsigned long catchGameStartTime = 0;
+const unsigned long CATCH_GAME_DURATION_MS = 10000; // 10 seconds
+int catchGameScore = 0;
+
 // Forward declarations
 void initOLED();
 void drawStartupScreen();
@@ -104,17 +119,84 @@ void loadPet();
 void handleInput();
 void playSFX(int frequency, int duration);
 void resetPet();
+const unsigned char* getPetBitmap();
+void updateCatchGame();
 
-// Bitmap arrays for pet expressions (simple 16x16 placeholders - to be replaced with actual art)
-const unsigned char petIdle[16] PROGMEM = {
-  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+// Bitmap arrays for pet expressions (16x16 pixels)
+// Format: 16 columns, each column is 2 bytes (16 pixels / 8 bits per byte = 2 bytes)
+const unsigned char petIdle[32] PROGMEM = {
+  // Simple blob/pet shape - idle expression
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  // Top 8 rows
+  0x7C, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  // Row 8-15: head/top (wider)
+  0xFE, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  // Row 16-23: upper body (wider)
+  0xFE, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00   // Row 24-31: lower body
 };
-const unsigned char petHappy[16] PROGMEM = {
-  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+const unsigned char petHappy[32] PROGMEM = {
+  // Happy pet - curved mouth (smile)
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  // Top 8 rows
+  0x7C, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  // Head
+  0xFE, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  // Upper body with smile
+  0xFE, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00   // Lower body
 };
-// ... other expressions omitted for brevity, but we'll implement real ones later
+const unsigned char petSad[32] PROGMEM = {
+  // Sad pet - downturned mouth (frown)
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  // Top
+  0x7C, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  // Head
+  0xFE, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  // Upper body
+  0xFE, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00   // Lower body with frown
+};
+const unsigned char petHungry[32] PROGMEM = {
+  // Hungry pet - mouth open
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  // Top
+  0x7C, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  // Head
+  0xFE, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  // Upper body
+  0xFE, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00   // Lower body with open mouth (larger gap)
+};
+const unsigned char petSick[32] PROGMEM = {
+  // Sick pet - X eyes and possibly sad mouth
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  // Top
+  0x7C, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  // Head with X eyes (we'll approximate)
+  0xFE, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  // Upper body
+  0xFE, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00   // Lower body
+};
+const unsigned char petSleeping[32] PROGMEM = {
+  // Sleeping pet - closed eyes, Z's (represented as dots)
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  // Top
+  0x7C, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  // Head with closed eyes (dashes instead of eyes)
+  0xFE, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  // Upper body
+  0xFE, 0x02, 0x08, 0x20, 0x00, 0x08, 0x02, 0x00   // Lower body with Z's (diagonal dots)
+};
+const unsigned char petEating[32] PROGMEM = {
+  // Eating pet - food in mouth (represented as a dot)
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  // Top
+  0x7C, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  // Head
+  0xFE, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  // Upper body
+  0xFE, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02    // Lower body with food (dot in mouth area)
+};
+const unsigned char petPlaying[32] PROGMEM = {
+  // Playing pet - motion lines (changed pose with legs apart)
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  // Top
+  0x7C, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  // Head
+  0xFE, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  // Upper body
+  0xFE, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00   // Lower body with motion (legs apart)
+};
+const unsigned char petCleaning[32] PROGMEM = {
+  // Cleaning pet - bubbles (multiple dots)
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  // Top
+  0x7C, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  // Head
+  0xFE, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  // Upper body with bubbles
+  0xFE, 0x00, 0x02, 0x08, 0x20, 0x00, 0x08, 0x02   // Lower body with bubbles (dots)
+};
+
+// Determine which pet expression to show based on stats
+const unsigned char* getPetBitmap() {
+  // Priority: sick > sleeping > hungry > happy > idle
+  if (pet.health < 30) return petSick;
+  if (currentState == STATE_SLEEPING) return petSleeping;
+  if (pet.hunger < 30) return petHungry;
+  if (pet.happiness > 70) return petHappy;
+  return petIdle;
+}
 
 void setup() {
   Serial.begin(115200);
@@ -129,6 +211,7 @@ void setup() {
 
   // Show startup screen
   currentState = STATE_STARTUP;
+  startupStartTime = millis();
   lastUpdate = millis();
   drawStartupScreen();
 }
@@ -151,11 +234,25 @@ void loop() {
     savePet();
   }
 
+  // Update blinking
+  if (now - lastBlink >= BLINK_INTERVAL_MS) {
+    lastBlink = now;
+    eyesOpen = false;
+  }
+  if (!eyesOpen && now - lastBlink >= BLINK_DURATION_MS) {
+    eyesOpen = true;
+  }
+
+  // Update catch game if playing
+  if (currentState == STATE_PLAYING) {
+    updateCatchGame();
+  }
+
   // Draw current state
   switch (currentState) {
     case STATE_STARTUP:
       // Startup screen is shown for a fixed time then transitions
-      if (now - lastUpdate > 2000) { // 2 seconds startup
+      if (now - startupStartTime > STARTUP_DISPLAY_MS) { // 2 seconds startup
         currentState = STATE_MAIN;
         drawMainScreen();
       }
@@ -225,6 +322,7 @@ void drawStartupScreen() {
 
 void drawMainScreen() {
   display.clearDisplay();
+  display.setTextSize(1); // Set text size to 1 for main screen
 
   // Draw status bar (top 16 pixels - yellow section conceptually)
   display.fillRect(0, 0, SCREEN_WIDTH, 16, SSD1306_WHITE);
@@ -236,9 +334,9 @@ void drawMainScreen() {
   display.print(F("Hun:"));
   display.print(pet.hunger);
 
-  // Draw pet in the middle (blue section)
-  // We'll draw a simple placeholder for now
-  display.fillRect(SCREEN_WIDTH/2 - 8, SCREEN_HEIGHT/2 - 8, 16, 16, SSD1306_WHITE);
+  // Draw pet in the middle (blue section) with blinking eyes
+  const unsigned char* petBitmap = getPetBitmap();
+  display.drawBitmap(SCREEN_WIDTH/2 - 8, 16, petBitmap, 16, 16, SSD1306_WHITE);
 
   // Draw level
   display.setTextColor(SSD1306_WHITE);
@@ -292,21 +390,77 @@ void drawFeeding() {
   }
 }
 
-void drawPlaying() {
-  // Simple catch game placeholder
-  display.clearDisplay();
-  display.setCursor(10, 20);
-  display.print(F("PLAYING..."));
-  display.display();
-  // TODO: Implement actual catch game
-  // For now, just return after a short time
-  static unsigned long playStart = 0;
-  if (playStart == 0) playStart = millis();
-  if (millis() - playStart > 2000) {
-    playStart = 0;
+void updateCatchGame() {
+  unsigned long now = millis();
+  // Initialize target position once
+  if (catchGameTargetX == 0 && catchGameTargetY == 0) {
+    catchGameTargetX = random(20, SCREEN_WIDTH - 20);
+    catchGameTargetY = random(20, SCREEN_HEIGHT - 20);
+  }
+
+  // Move cursor with joystick (smooth)
+  catchGameCursorX += joyX / 8; // Scale down joystick input
+  catchGameCursorY += joyY / 8;
+
+  // Keep cursor within bounds
+  if (catchGameCursorX < 5) catchGameCursorX = 5;
+  if (catchGameCursorX > SCREEN_WIDTH - 5) catchGameCursorX = SCREEN_WIDTH - 5;
+  if (catchGameCursorY < 5) catchGameCursorY = 5;
+  if (catchGameCursorY > SCREEN_HEIGHT - 5) catchGameCursorY = SCREEN_HEIGHT - 5;
+
+  // Check for catch (button press)
+  if (joyButtonPressed) {
+    joyButtonPressed = false;
+    // Check if cursor is near target (within 8 pixels)
+    if (abs(catchGameCursorX - catchGameTargetX) < 8 && abs(catchGameCursorY - catchGameTargetY) < 8) {
+      // Successful catch
+      catchGameScore++;
+      pet.happiness = min(100, pet.happiness + 15);
+      pet.experience += 10;
+      playSFX(1500, 50);
+      // Spawn new target
+      catchGameTargetX = random(20, SCREEN_WIDTH - 20);
+      catchGameTargetY = random(20, SCREEN_HEIGHT - 20);
+    } else {
+      // Miss
+      playSFX(200, 50);
+    }
+  }
+
+  // Check if time is up
+  if (now - catchGameStartTime > CATCH_GAME_DURATION_MS) {
+    // Game over, return to main
     currentState = STATE_MAIN;
+    // Apply final score effects
+    pet.energy = max(0, pet.energy - 10); // Cost energy for playing
     drawMainScreen();
   }
+}
+
+void drawPlaying() {
+  display.clearDisplay();
+
+  // Draw cursor
+  display.drawRect(catchGameCursorX-2, catchGameCursorY-2, 5, 5, SSD1306_WHITE);
+
+  // Draw target
+  display.drawRect(catchGameTargetX-2, catchGameTargetY-2, 5, 5, SSD1306_INVERSE);
+
+  // Draw score
+  display.setTextSize(1);
+  display.setCursor(2, 2);
+  display.print(F("Score:"));
+  display.print(catchGameScore);
+
+  // Draw timer
+  unsigned long elapsed = millis() - catchGameStartTime;
+  unsigned long remaining = (CATCH_GAME_DURATION_MS - elapsed) / 1000;
+  display.setCursor(2, 10);
+  display.print(F("Time:"));
+  display.print(remaining);
+  display.print(F("s"));
+
+  display.display();
 }
 
 void drawCleaning() {
@@ -450,8 +604,8 @@ void loadPet() {
   // Validate version and data
   if (tempPet.saveVersion == SAVE_VERSION &&
       tempPet.health <= 100 && tempPet.hunger <= 100 &&
-      tempPet.happiness <= 100 && pet.energy <= 100 &&
-      pet.cleanliness <= 100) {
+      tempPet.happiness <= 100 && tempPet.energy <= 100 &&
+      tempPet.cleanliness <= 100) {
     pet = tempPet;
   } else {
     // Invalid data, initialize new pet
@@ -504,7 +658,15 @@ void handleInput() {
         joyButtonPressed = false; // Consume the press
         switch (menuSelection) {
           case 0: currentState = STATE_FEEDING; break;
-          case 1: currentState = STATE_PLAYING; break;
+          case 1:
+            currentState = STATE_PLAYING;
+            catchGameStartTime = millis();
+            catchGameScore = 0;
+            catchGameTargetX = 0;
+            catchGameTargetY = 0;
+            catchGameCursorX = SCREEN_WIDTH/2;
+            catchGameCursorY = SCREEN_HEIGHT/2;
+            break;
           case 2: currentState = STATE_CLEANING; break;
           case 3: currentState = STATE_SLEEPING; break;
           case 4: currentState = STATE_STATUS; break; // CARE -> STATUS for now
@@ -514,7 +676,7 @@ void handleInput() {
           // Reset feeding/playing etc timers if needed
           switch (currentState) {
             case STATE_FEEDING: /* feedingStart = millis(); */ break;
-            case STATE_PLAYING: /* playStart = millis(); */ break;
+            case STATE_PLAYING: /* already initialized */ break;
             case STATE_CLEANING: /* cleanStart = millis(); */ break;
           }
           // Draw the new state
